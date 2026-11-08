@@ -13,6 +13,8 @@ namespace FixPhotoshop
         public Fix Fix;
         public DateTime When;
         public string Outcome = "ожидает проверки";
+        public bool Failed;
+        public bool Reverted;
         public List<string> Log = new List<string>();
     }
 
@@ -297,11 +299,11 @@ namespace FixPhotoshop
             var cap = StackCapture.Capture(ps, windows, manual);
             if (dialog != null) cap.ErrorDialogTitle = dialog.Title;
             cap.NvidiaSmi = Snapshot.QueryNvidiaSmi();
-            var findings = Diagnosis.Hang(cap);
 
             Snap.RefreshAcr();
             if (!BaselineFindings.Any(f => f.Id == "tempdisable"))
                 BaselineFindings.AddRange(Diagnosis.Baseline(Snap).Where(f => f.Id == "tempdisable"));
+            var findings = Diagnosis.Hang(cap).Concat(Diagnosis.FromLogs(Snap)).OrderByDescending(f => f.Confidence).ToList();
 
             lock (sync)
             {
@@ -313,9 +315,12 @@ namespace FixPhotoshop
                 var last = Attempts.LastOrDefault();
                 if (last != null && last.Outcome == "ожидает проверки")
                 {
-                    last.Outcome = "не помогло";
+                    last.Failed = true;
+                    last.Outcome = last.Fix.Manual ? "сбой повторился (ручной шаг: программа не может проверить, был ли он выполнен)" : "не помогло";
                     failedByCapture = last;
-                    Log("Шаг «" + last.Fix.Title + "» не помог: зависание повторилось.");
+                    Log(last.Fix.Manual
+                        ? "После ручного шага «" + last.Fix.Title + "» сбой повторился. Если шаг не выполнялся, стоит его сделать."
+                        : "Шаг «" + last.Fix.Title + "» не помог: сбой повторился.");
                 }
             }
 
@@ -357,7 +362,11 @@ namespace FixPhotoshop
             lock (sync)
             {
                 CaptureDone = false;
-                if (failedByCapture != null) failedByCapture.Outcome = "ожидает проверки";
+                if (failedByCapture != null)
+                {
+                    failedByCapture.Outcome = "ожидает проверки";
+                    failedByCapture.Failed = false;
+                }
                 failedByCapture = null;
             }
             Status("Photoshop снова отвечает", "Это было долгое ожидание, а не мёртвое зависание. Слежу дальше.", Level.Info);
@@ -415,6 +424,11 @@ namespace FixPhotoshop
         {
             switch (fix.Id)
             {
+                case "model-zoo":
+                case "ai-network":
+                    return "ИИ-модели скачались заново. Старые папки сохранены с приставкой fixphotoshop-bak-, их можно удалить.";
+                case "gpu-high":
+                    return "Photoshop теперь работает на мощной видеокарте. Настройка останется: Параметры Windows → Экран → Графика.";
                 case "ai-cpu":
                     return "Ошибка связана с работой ИИ-функций на видеокарте. Файл DisableGPUInference.txt оставьте на месте и учитывайте ограничения из инструкции.";
                 case "gpu-off":
@@ -439,10 +453,13 @@ namespace FixPhotoshop
 
                 if (!ClosePhotoshop()) return;
 
-                var previous = Attempts.LastOrDefault();
-                if (previous != null && previous.Outcome == "не помогло" && previous.Fix.RevertIfNoHelp)
+                if (!fix.KeepsPrevious)
                 {
-                    foreach (string line in Backups.Undo(previous.Fix.Id)) Log("Возврат: " + line);
+                    foreach (var failed in Attempts.Where(a => a.Failed && a.Fix.RevertIfNoHelp && !a.Reverted).ToList())
+                    {
+                        foreach (string line in Backups.Undo(failed.Fix.Id)) Log("Возврат: " + line);
+                        failed.Reverted = true;
+                    }
                 }
 
                 var attempt = new Attempt { Fix = fix, When = DateTime.Now };

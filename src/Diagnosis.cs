@@ -75,29 +75,78 @@ namespace FixPhotoshop
                     Id = "multi-gpu",
                     Title = "В системе несколько видеокарт",
                     Evidence = string.Join("; ", s.RealGpus.ToArray()),
-                    Advice = "Эксперты сообщества Adobe советуют на время проверки отключить встроенную видеокарту в Диспетчере устройств: приложения Adobe плохо работают с несколькими GPU."
+                    Advice = "Приложения Adobe могут плохо работать с двумя видеокартами. Назначьте Photoshop дискретную видеокарту (есть шаг в программе). На ноутбуке не отключайте встроенную: через неё может работать экран.",
+                    Fixes = new[] { "gpu-high" }
                 });
 
-            if (s.Onset.HasValue)
+            if (s.Onset.HasValue) r.AddRange(Timeline(s.Changes, s.Onset.Value));
+            return r;
+        }
+
+        static bool IsGraphicsSoftware(string name)
+        {
+            return name.StartsWith("NVIDIA", StringComparison.OrdinalIgnoreCase) ||
+                   name.IndexOf("Radeon", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("AMD Software", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("Intel(R) Graphics", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        // Only changes that can matter become findings; the rest stays in the report's change list.
+        public static List<Finding> Timeline(List<Change> changes, DateTime onset)
+        {
+            var r = new List<Finding>();
+            DateTime from = onset.AddDays(-3), to = onset.AddDays(1);
+            var near = changes.Where(x => x.When >= from && x.When <= to).OrderByDescending(x => x.When).ToList();
+            string onsetText = string.Format("первое записанное зависание или сбой Photoshop: {0:yyyy-MM-dd HH:mm}", onset);
+
+            var system = near.Where(c => c.Kind == "Camera Raw" || c.Kind == "Photoshop" || c.Kind == "Обновление Windows").ToList();
+            foreach (var c in system)
             {
-                DateTime onset = s.Onset.Value;
-                DateTime from = onset.AddDays(-3), to = onset.AddDays(1);
-                foreach (var c in s.Changes.Where(x => x.When >= from && x.When <= to).OrderByDescending(x => x.When))
+                bool adobe = c.Kind != "Обновление Windows";
+                r.Add(new Finding
                 {
-                    bool adobe = c.Kind == "Camera Raw" || c.Kind == "Photoshop";
-                    r.Add(new Finding
-                    {
-                        Confidence = adobe ? 2 : 1,
-                        Id = "timeline-" + c.Kind,
-                        Title = "Совпадение по времени: " + c.Kind,
-                        Evidence = string.Format("{0} ({1:yyyy-MM-dd HH:mm}); первое записанное зависание или сбой Photoshop за {2} дн.: {3:yyyy-MM-dd HH:mm}", c.What, c.When, Snapshot.ChangeWindowDays, onset),
-                        Advice = adobe
-                            ? "Обновление вышло незадолго до начала проблемы. Это совпадение по времени, а не доказательство. Откат покажет, в нём ли дело."
-                            : "Изменение случилось незадолго до начала проблемы. Это только совпадение по времени.",
-                        Fixes = c.Kind == "Camera Raw" || c.Kind == "Photoshop" ? new[] { "rollback" } : new string[0]
-                    });
-                }
+                    Confidence = adobe ? 2 : 1,
+                    Id = "timeline-" + c.Kind,
+                    Title = "Совпадение по времени: " + c.Kind,
+                    Evidence = string.Format("{0} ({1:yyyy-MM-dd HH:mm}); {2}", c.What, c.When, onsetText),
+                    Advice = adobe
+                        ? "Обновление вышло незадолго до начала проблемы. Это совпадение по времени, а не доказательство. Откат покажет, в нём ли дело."
+                        : "Изменение случилось незадолго до начала проблемы. Это только совпадение по времени.",
+                    Fixes = adobe ? new[] { "rollback" } : new string[0]
+                });
             }
+
+            var graphics = near.Where(c => c.Kind == "Установлена программа" && IsGraphicsSoftware(c.What)).ToList();
+            if (graphics.Count > 0)
+            {
+                var driver = graphics.FirstOrDefault(c => c.What.IndexOf("Графический драйвер", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                                          c.What.IndexOf("Graphics Driver", StringComparison.OrdinalIgnoreCase) >= 0) ?? graphics[0];
+                r.Add(new Finding
+                {
+                    Confidence = 2,
+                    Id = "timeline-gpu-driver",
+                    Title = "Совпадение по времени: обновился драйвер видеокарты",
+                    Evidence = string.Format("{0} ({1:yyyy-MM-dd}), всего компонентов: {2}; {3}", driver.What, driver.When, graphics.Count, onsetText),
+                    Advice = (system.Count == 0 ? "Это единственное заметное изменение рядом с началом проблемы. " : "") + "Это совпадение по времени, а не доказательство. Проверить можно, поставив другой драйвер, например NVIDIA Studio.",
+                    Fixes = new[] { "driver-studio" }
+                });
+            }
+            return r;
+        }
+
+        public static List<Finding> FromLogs(Snapshot s)
+        {
+            var r = new List<Finding>();
+            if (s.Acr.ModelLogLines.Count > 0)
+                r.Add(new Finding
+                {
+                    Confidence = 3,
+                    Id = "ai-models",
+                    Title = "Camera Raw пишет в журнал, что ИИ-модели не загружены",
+                    Evidence = string.Join(" | ", s.Acr.ModelLogLines.Take(6).ToArray()),
+                    Advice = "Такие сообщения на форуме Adobe описаны для Camera Raw 18.7. Модели скачиваются с серверов Adobe. Ниже шаги: скачать их заново, при необходимости через другую сеть.",
+                    Fixes = new[] { "model-zoo", "ai-network" }
+                });
             return r;
         }
 
@@ -120,7 +169,7 @@ namespace FixPhotoshop
                     Title = "Photoshop показал окно с ошибкой: «" + c.ErrorDialogTitle + "»",
                     Evidence = "Окно процесса Photoshop с таким заголовком. Модуль Camera Raw " + (c.AcrModuleLoaded ? "загружен." : "не загружен."),
                     Advice = "Это общее сообщение, по нему самому причину не определить. Если оно появляется на конкретном инструменте, например размытии (ИИ-функция), у Adobe есть отдельные шаги: кнопка Reset GPU Support и файл DisableGPUInference.txt. Для таких функций Adobe рекомендует 8 ГБ видеопамяти; объём вашей указан в отчёте в строке nvidia-smi. Журналы Camera Raw за этот момент добавлены в отчёт.",
-                    Fixes = new[] { "gpu-reset-button", "ai-cpu", "acr-prefs" }
+                    Fixes = new[] { "model-zoo", "ai-network", "gpu-high", "gpu-reset-button", "ai-cpu", "acr-prefs" }
                 });
 
             var stuck = ui.Where(t => t.KernelStuck).ToList();

@@ -80,6 +80,9 @@ namespace FixPhotoshop
                 b.AppendLine("Подпапки GPU: " + (snap.Acr.GpuAppDirs.Count == 0 ? "нет" : string.Join(", ", snap.Acr.GpuAppDirs.ToArray())));
                 foreach (string l in snap.Acr.GpuFiles) b.AppendLine("GPU-файл: " + l);
                 foreach (string l in snap.Acr.UserData) b.AppendLine("Данные: " + l);
+                b.AppendLine(snap.Acr.ModelZoo.Count == 0 ? "ИИ-модели: папки ModelZoo не найдены." : "ИИ-модели:");
+                foreach (string l in snap.Acr.ModelZoo) b.AppendLine(l);
+                foreach (string l in snap.Acr.ModelLogLines) b.AppendLine("Ошибка моделей в журнале: " + l);
                 if (snap.Acr.GpuConfigText != null)
                 {
                     b.AppendLine("Содержимое Camera Raw GPU Config.txt:");
@@ -122,6 +125,8 @@ namespace FixPhotoshop
             b.AppendLine(string.Format("Память процесса: {0} МБ, свободно ОЗУ: {1:0.0} ГБ", c.WorkingSetMb, c.RamFreeGb));
             if (c.StackCompared) b.AppendLine("Стек окна между снимками: " + (c.StackStable ? "не менялся" : "менялся"));
             if (c.NvidiaSmi != null) b.AppendLine("nvidia-smi в момент зависания: " + c.NvidiaSmi);
+            b.AppendLine("Драйверы видеокарт внутри Photoshop: " + string.Join(", ", c.Modules.Where(m => Mods.IsGpuDriver(m.Name)).Select(m => m.Name).ToArray()));
+            if (c.PhotoshopPath != null) b.AppendLine("Настройка Windows «видеокарта для программы»: " + (Util.Try(() => Fixes.ReadGpuPreference(c.PhotoshopPath), null) ?? "не задана"));
             if (!string.IsNullOrEmpty(c.Error)) b.AppendLine("Ограничения снимка: " + c.Error);
 
             b.AppendLine();

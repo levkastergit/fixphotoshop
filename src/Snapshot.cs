@@ -32,6 +32,8 @@ namespace FixPhotoshop
         public int CacheFiles;
         public List<string> UserData = new List<string>();
         public List<string> LogTails = new List<string>();
+        public List<string> ModelZoo = new List<string>();
+        public List<string> ModelLogLines = new List<string>();
     }
 
     sealed class Snapshot
@@ -364,6 +366,14 @@ namespace FixPhotoshop
                 Acr.CacheBytes += Util.Try(() => new FileInfo(f).Length, 0L);
             }
 
+            foreach (string zoo in Fixes.ModelZooDirs())
+            {
+                var files = Util.WalkFiles(zoo, 6);
+                Acr.ModelZoo.Add(string.Format("{0}: файлов {1}, размер {2}", zoo, files.Count, Util.Gb(files.Sum(f => Util.Try(() => new FileInfo(f).Length, 0L)))));
+                foreach (string f in files.OrderByDescending(x => Util.Try(() => File.GetLastWriteTime(x), DateTime.MinValue)).Take(40))
+                    Acr.ModelZoo.Add(string.Format("  {0:yyyy-MM-dd HH:mm}  {1} байт  {2}", File.GetLastWriteTime(f), new FileInfo(f).Length, f.Substring(zoo.Length).TrimStart('\\')));
+            }
+
             if (Acr.RootExists)
             {
                 foreach (string dir in Fixes.AcrUserDataDirs())
@@ -375,8 +385,17 @@ namespace FixPhotoshop
                         files.Count == 0 ? "-" : newest.ToString("yyyy-MM-dd HH:mm")));
                 }
                 string logs = Path.Combine(root, "logs");
-                foreach (string f in Util.WalkFiles(logs, 2).OrderByDescending(x => Util.Try(() => File.GetLastWriteTime(x), DateTime.MinValue)).Take(3))
-                    Acr.LogTails.Add("--- " + f + "\n" + Util.Clip(Util.TailLines(f, 40), 5000));
+                var logFiles = Util.WalkFiles(logs, 2)
+                    .Where(x => Path.GetFileName(x).IndexOf("Lightroom", StringComparison.OrdinalIgnoreCase) < 0)
+                    .OrderByDescending(x => Util.Try(() => File.GetLastWriteTime(x), DateTime.MinValue))
+                    .Take(3);
+                foreach (string f in logFiles)
+                {
+                    var digest = LogDigest.Analyze(LogDigest.ReadLastLines(f, 8 * 1024 * 1024));
+                    Acr.LogTails.Add("--- " + f + "\n" + string.Join("\n", digest.Lines.ToArray()));
+                    foreach (string line in digest.ModelTrouble)
+                        if (!Acr.ModelLogLines.Contains(line)) Acr.ModelLogLines.Add(line);
+                }
             }
         }
     }

@@ -40,6 +40,13 @@ namespace FixPhotoshop
                 return 0;
             }
 
+            string highPerformanceExe = Option(args, "--high-performance");
+            if (highPerformanceExe != null)
+            {
+                foreach (string l in Fixes.HighPerformanceFix(highPerformanceExe).Apply()) Console.WriteLine(l);
+                return 0;
+            }
+
             string applyId = Option(args, "--apply");
             if (applyId != null || args.Contains("--list"))
             {
@@ -71,7 +78,7 @@ namespace FixPhotoshop
                 return engine.CaptureDone ? 0 : 3;
             }
 
-            Console.WriteLine("Без аргументов запускается окно программы. Аргументы: --headless [--timeout N] [--report файл] | --list | --apply ID | --undo");
+            Console.WriteLine("Без аргументов запускается окно программы. Аргументы: --headless [--timeout N] [--report файл] | --list | --apply ID | --high-performance EXE | --undo");
             return 1;
         }
     }

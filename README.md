@@ -29,6 +29,9 @@
 
 | Шаг | Что делает | Как откатить |
 |---|---|---|
+| ИИ-модели заново | Переименовывает папки `ModelZoo`, Camera Raw скачивает модели снова | Автоматически, если не помогло |
+| Другая сеть для моделей | Вручную: мобильный интернет или VPN | Не требуется |
+| Мощная видеокарта для Photoshop | Записывает настройку Windows «Высокая производительность» | Автоматически, если не помогло |
 | Сброс проверки видеокарты | Убирает `Camera Raw GPU Config.txt` и файлы `TempDisableGPU*` | Кнопка отката |
 | Проверка без видеокарты | Создаёт `TempDisableGPU3`, и Camera Raw запускается без GPU | Автоматически, если не помогло |
 | Закрытие оверлеев | Закрывает программы, чьи модули найдены внутри Photoshop | Запустить их снова |
@@ -38,6 +41,7 @@
 | Сброс настроек Camera Raw | Вручную, по инструкции в программе | Настройки не восстанавливаются |
 | Пресеты и профили | Временно переименовывает папки | Автоматически, если не помогло |
 | Настройки Photoshop | Временно переименовывает папку настроек | Автоматически, если не помогло |
+| Драйвер NVIDIA Studio | Вручную, по инструкции | Поставить прежний драйвер |
 | Запуск без сторонних плагинов | Вручную, удержанием Shift | Действует один сеанс |
 | Откат Camera Raw | Вручную, по инструкции | Установить новую версию |
 
@@ -55,6 +59,7 @@
 - [FAQ Adobe по графическому процессору в Camera Raw](https://helpx.adobe.com/camera-raw/kb/acr-gpu-faq.html): файлы конфигурации и `TempDisableGPU`
 - [Запуск Photoshop без сторонних плагинов](https://helpx.adobe.com/photoshop/kb/plug-ins-photoshop-troubleshooting.html)
 - [Установщики Camera Raw](https://helpx.adobe.com/camera-raw/kb/camera-raw-plug-in-installer.html)
+- Форум Adobe про ИИ-модели в Camera Raw 18.7: [модели не загружены, помог VPN](https://community.adobe.com/questions-563/camera-raw-18-7-select-people-fails-because-ml-model-is-not-loaded-people-model-not-provisioned-1645435), [шаги поддержки и откат на 18.4](https://community.adobe.com/questions-675/on-export-lrc-throws-a-popup-saying-some-ai-models-failed-to-download-please-try-again-later-1650869)
 - Форум Adobe: [откат на 17.5 устраняет ошибку GPU](https://community.adobe.com/questions-563/camera-raw-18-4-crashes-with-gpu-error-when-opening-the-presets-panel-camera-raw-17-5-works-correctly-1631769), [сброс настроек и несколько GPU](https://community.adobe.com/questions-712/problem-with-camera-raw-and-gpu-1623951), [цитаты шага про TempDisableGPU](https://community.adobe.com/questions-712/camera-raw-requires-gpu-acceleration-to-edit-photos-1171141)
 
 ## Сборка

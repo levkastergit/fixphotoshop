@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using Microsoft.Win32;
 
 namespace FixPhotoshop
 {
@@ -15,6 +16,8 @@ namespace FixPhotoshop
         public string Instructions;
         // Experiments that cost something (no GPU, no presets) are put back when they turn out not to help.
         public bool RevertIfNoHelp;
+        // This step builds on the previous experiment, so a failed one must stay in place for it.
+        public bool KeepsPrevious;
         public Func<List<string>> Apply;
     }
 
@@ -60,6 +63,11 @@ namespace FixPhotoshop
             Record(fixId, "created", path, "");
         }
 
+        public static void RegistryChanged(string fixId, string valueName, string oldData)
+        {
+            Record(fixId, "registry", valueName, oldData ?? "");
+        }
+
         static List<string[]> Entries()
         {
             if (!File.Exists(Manifest)) return new List<string[]>();
@@ -103,6 +111,12 @@ namespace FixPhotoshop
         static void UndoEntry(string[] e, List<string> log)
         {
             string path = e[2];
+            if (e[1] == "registry")
+            {
+                Fixes.RestoreGpuPreference(path, e[3]);
+                log.Add("Возвращена настройка видеокарты для " + path);
+                return;
+            }
             if (e[1] == "created")
             {
                 if (File.Exists(path)) File.Delete(path);
@@ -127,8 +141,75 @@ namespace FixPhotoshop
     {
         public static string AcrRoot { get { return Path.Combine(Util.AppData, "Adobe", "CameraRaw"); } }
         public static string AcrCacheDir { get { return Path.Combine(Util.LocalAppData, "Adobe", "CameraRaw", "Cache"); } }
+        const string GpuPrefsKey = @"Software\Microsoft\DirectX\UserGpuPreferences";
 
-        static readonly HashSet<string> NotUserData = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "GPU", "logs", "Cache" };
+        static readonly HashSet<string> NotUserData = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "GPU", "logs", "Cache", "ModelZoo", "ModelSupport" };
+
+        // Camera Raw keeps its AI models in a per-user folder and, on some systems, a machine-wide one.
+        public static List<string> ModelZooDirs()
+        {
+            var dirs = new List<string> { Path.Combine(AcrRoot, "ModelZoo") };
+            string programData = Environment.GetEnvironmentVariable("ProgramData");
+            if (!string.IsNullOrEmpty(programData)) dirs.Add(Path.Combine(programData, "Adobe", "CameraRaw", "ModelZoo"));
+            return dirs.Where(Directory.Exists).ToList();
+        }
+
+        static Fix ModelZooFix()
+        {
+            return new Fix
+            {
+                Id = "model-zoo",
+                Title = "Скачать ИИ-модели Camera Raw заново",
+                Explain = "Папки ModelZoo будут переименованы, и Camera Raw заново скачает модели при использовании инструмента (нужен интернет). Этот шаг советует поддержка Adobe. Если не поможет, старые папки вернутся.",
+                RevertIfNoHelp = true,
+                Apply = () => SetAsideEach("model-zoo", ModelZooDirs())
+            };
+        }
+
+        public static string ReadGpuPreference(string exe)
+        {
+            using (var key = Registry.CurrentUser.OpenSubKey(GpuPrefsKey))
+                return key == null ? null : key.GetValue(exe) as string;
+        }
+
+        // The value can carry other flags such as AutoHDREnable, which have to survive.
+        public static string WithHighPerformance(string current)
+        {
+            var parts = (current ?? "").Split(';')
+                .Where(p => p.Trim().Length > 0 && !p.Trim().StartsWith("GpuPreference=", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            parts.Add("GpuPreference=2");
+            return string.Join(";", parts.ToArray()) + ";";
+        }
+
+        public static void RestoreGpuPreference(string exe, string oldData)
+        {
+            using (var key = Registry.CurrentUser.CreateSubKey(GpuPrefsKey))
+            {
+                if (oldData.Length == 0) key.DeleteValue(exe, false);
+                else key.SetValue(exe, oldData, RegistryValueKind.String);
+            }
+        }
+
+        public static Fix HighPerformanceFix(string exe)
+        {
+            return new Fix
+            {
+                Id = "gpu-high",
+                Title = "Назначить Photoshop мощную видеокарту",
+                Explain = "То же, что Параметры Windows → Экран → Графика → Photoshop → «Высокая производительность». На ноутбуке с двумя видеокартами это заставит Photoshop работать на дискретной. Если не поможет, настройка вернётся.",
+                RevertIfNoHelp = true,
+                Apply = () =>
+                {
+                    string old = ReadGpuPreference(exe);
+                    string updated = WithHighPerformance(old);
+                    using (var key = Registry.CurrentUser.CreateSubKey(GpuPrefsKey))
+                        key.SetValue(exe, updated, RegistryValueKind.String);
+                    Backups.RegistryChanged("gpu-high", exe, old);
+                    return new List<string> { "Настройка видеокарты для " + exe + ": " + updated };
+                }
+            };
+        }
 
         public static List<string> AcrUserDataDirs()
         {
@@ -201,6 +282,23 @@ namespace FixPhotoshop
             // An error window means Camera Raw itself opens, so Adobe's own reset button is reachable.
             // AI tools also ignore the GPU preference, so testing "without GPU" would say nothing about them.
             bool errorDialog = capture != null && capture.ErrorDialogTitle != null;
+            var known = findings.ToList();
+            bool aiTrouble = errorDialog || known.Any(f => f.Id == "ai" || f.Id == "ai-models");
+
+            if (aiTrouble && ModelZooDirs().Count > 0) list.Add(ModelZooFix());
+            // The previous step renamed the folders, so they may legitimately be gone by now.
+            if (aiTrouble && (ModelZooDirs().Count > 0 || done.Contains("model-zoo")))
+                list.Add(new Fix
+                {
+                    Id = "ai-network",
+                    Title = "Скачать модели через другую сеть (вручную)",
+                    Explain = "Папки моделей пока остаются чистыми: на форуме Adobe модели у одного пользователя скачались только через VPN.",
+                    Manual = true,
+                    KeepsPrevious = true,
+                    Instructions = "1. Подключите компьютер к другой сети: мобильный интернет с телефона или VPN.\n2. Запустите Photoshop и откройте Camera Raw.\n3. Выберите инструмент, вызывавший ошибку, и подождите несколько минут: модели скачиваются при первом использовании.\n4. Если заработало, дело было в доступе к серверам загрузки. После скачивания VPN можно отключить."
+                });
+            if (known.Any(f => f.Id == "multi-gpu") && capture != null && capture.PhotoshopPath != null)
+                list.Add(HighPerformanceFix(capture.PhotoshopPath));
 
             var gpuFiles = GpuStateFiles();
             if (errorDialog)
@@ -296,6 +394,8 @@ namespace FixPhotoshop
                     Apply = () => SetAsideAll("acr-cache", new List<string> { AcrCacheDir })
                 });
 
+            if (!aiTrouble && ModelZooDirs().Count > 0) list.Add(ModelZooFix());
+
             list.Add(new Fix
             {
                 Id = "acr-prefs",
@@ -326,6 +426,16 @@ namespace FixPhotoshop
                     Apply = () => SetAsideAll("ps-prefs", new List<string> { settings })
                 });
 
+            if (known.Any(f => f.Id == "timeline-gpu-driver"))
+                list.Add(new Fix
+                {
+                    Id = "driver-studio",
+                    Title = "Поставить драйвер NVIDIA Studio (вручную)",
+                    Explain = "Драйвер обновился примерно тогда же, когда началась проблема. Эксперты сообщества Adobe советуют для Photoshop драйвер Studio, а не Game Ready.",
+                    Manual = true,
+                    Instructions = "1. Откройте https://www.nvidia.com/en-us/drivers/ и выберите свою видеокарту.\n2. В поле типа драйвера выберите Studio Driver.\n3. В установщике выберите «Выборочная установка» и отметьте «Чистая установка».\n4. Перезагрузите компьютер и проверьте снова."
+                });
+
             list.Add(new Fix
             {
                 Id = "plugins",
@@ -339,9 +449,9 @@ namespace FixPhotoshop
             {
                 Id = "rollback",
                 Title = "Откатить Camera Raw на предыдущую версию (вручную)",
-                Explain = "На форуме Adobe пользователи сообщали, что проблемы с GPU исчезали на более старых версиях Camera Raw.",
+                Explain = "На форуме Adobe пользователи сообщали, что проблемы исчезали на более старых версиях. Один пользователь решил проблему с ИИ-моделями в 18.7 откатом на 18.4.",
                 Manual = true,
-                Instructions = "1. Откройте страницу Adobe: https://helpx.adobe.com/camera-raw/kb/camera-raw-plug-in-installer.html\n2. Посмотрите, есть ли установщик предыдущей версии (набор версий там неполный) и совместим ли он с вашим Photoshop.\n3. Отключите автообновление Photoshop в Creative Cloud, иначе новая версия вернётся.\n4. Если установщика нет: Creative Cloud → Photoshop → «…» → Другие версии."
+                Instructions = "1. Отключите автообновление Photoshop в Creative Cloud, иначе новая версия вернётся.\n2. Откройте страницу Adobe: https://helpx.adobe.com/camera-raw/kb/camera-raw-plug-in-installer.html\n3. Посмотрите, есть ли установщик более старой версии, например 18.4 (набор версий там неполный), и совместим ли он с вашим Photoshop.\n4. Если установщика нет: Creative Cloud → Photoshop → «…» → Другие версии."
             });
 
             var boost = new Dictionary<string, int>();
@@ -361,6 +471,28 @@ namespace FixPhotoshop
                 .ThenBy(x => x.i)
                 .Select(x => x.f)
                 .ToList();
+        }
+
+        // The machine-wide folder may need administrator rights, which should not cancel the per-user one.
+        static List<string> SetAsideEach(string fixId, List<string> paths)
+        {
+            var log = new List<string>();
+            int moved = 0;
+            foreach (string p in paths)
+            {
+                try
+                {
+                    string backup = Backups.SetAside(fixId, p);
+                    log.Add("Убрано: " + p + " -> " + Path.GetFileName(backup));
+                    moved++;
+                }
+                catch (Exception ex)
+                {
+                    log.Add("Не удалось убрать " + p + ": " + ex.Message + " Закройте Creative Cloud (значок в трее) или запустите FixPhotoshop от имени администратора.");
+                }
+            }
+            if (moved == 0) throw new IOException(string.Join(" ", log.ToArray()));
+            return log;
         }
 
         static List<string> SetAsideAll(string fixId, List<string> paths)
