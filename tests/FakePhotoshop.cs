@@ -28,7 +28,8 @@ static class FakePhotoshop
         string scenario = args.Length > 0 ? args[0] : "ok";
         LoadLibrary(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Camera Raw.8bi"));
 
-        var form = new Form { Text = "Camera Raw 18.7 - Test", Width = 420, Height = 200 };
+        string title = scenario == "docname" ? "ошибка.jpg @ 66,7% (RGB/8#) - Adobe Photoshop" : "Camera Raw 18.7 - Test";
+        var form = new Form { Text = title, Width = 420, Height = 200 };
         var timer = new System.Windows.Forms.Timer { Interval = 1500 };
         timer.Tick += (s, e) =>
         {
@@ -46,6 +47,9 @@ static class FakePhotoshop
         {
             case "gpu":
                 WaitInsideFakeDriver(IntPtr.Zero, System.Diagnostics.Process.GetCurrentProcess().Handle, 0);
+                break;
+            case "dialog":
+                new Form { Text = "Произошла ошибка.", Width = 320, Height = 160 }.Show();
                 break;
             case "spin":
                 while (true) { }

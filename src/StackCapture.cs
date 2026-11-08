@@ -24,6 +24,18 @@ namespace FixPhotoshop
             return title != null && title.IndexOf("Camera Raw", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
+        // An error window keeps pumping messages, so it never looks hung; its title is the signal.
+        // The main window shows the document name, which can contain any word, so it is excluded.
+        public static bool IsErrorDialog(WinInfo w)
+        {
+            string title = w.Title;
+            if (string.IsNullOrEmpty(title) || IsAcrTitle(title)) return false;
+            if (title.IndexOf("Photoshop", StringComparison.OrdinalIgnoreCase) >= 0 || title.IndexOf('@') >= 0) return false;
+            foreach (string word in new[] { "ошибк", "error", "не удалось", "failed" })
+                if (title.IndexOf(word, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            return false;
+        }
+
         public static List<WinInfo> ListWindows(int pid)
         {
             var result = new List<WinInfo>();

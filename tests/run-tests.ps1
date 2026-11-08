@@ -14,7 +14,7 @@ function Check($name, $ok, $detail) {
 if (Test-Path $bin) { Remove-Item $bin -Recurse -Force }
 New-Item -ItemType Directory $bin | Out-Null
 $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-& $csc /nologo /target:winexe /platform:x64 "/out:$bin\Photoshop.exe" /r:System.Windows.Forms.dll /r:System.Drawing.dll "$PSScriptRoot\FakePhotoshop.cs"
+& $csc /nologo /codepage:65001 /target:winexe /platform:x64 "/out:$bin\Photoshop.exe" /r:System.Windows.Forms.dll /r:System.Drawing.dll "$PSScriptRoot\FakePhotoshop.cs"
 if ($LASTEXITCODE -ne 0) { throw 'cannot compile the fake Photoshop' }
 Copy-Item "$env:WINDIR\System32\msvcrt.dll" "$bin\nvoglv64.dll"
 Copy-Item "$env:WINDIR\System32\msvcrt.dll" "$bin\Camera Raw.8bi"
@@ -60,7 +60,17 @@ Check 'ok: no false hang' ($r.Code -eq 3) "exit=$($r.Code)"
 Check 'ok: Camera Raw seen working' ($r.Out -match 'Camera Raw открылся и отвечает') $r.Out
 Check 'ok: report says no hang' ($r.Report -match 'Зависание ещё не зафиксировано') ''
 
-# 5. Fixes rename things aside; undo restores the exact tree.
+# 5. An error window is not a hang, but it has to be noticed.
+$r = Run-Scenario 'dialog' 60
+Check 'dialog: captured' ($r.Code -eq 0) "exit=$($r.Code)"
+Check 'dialog: verdict quotes the window' ($r.Report -match 'окно с ошибкой: «Произошла ошибка\.»') $r.Out
+Check 'dialog: window history recorded' ($r.Report -match '(?s)ОКНА PHOTOSHOP ЗА СЕАНС.*Произошла ошибка') ''
+
+# 6. A document that merely has the word in its name is not an error window.
+$r = Run-Scenario 'docname' 12
+Check 'docname: no false alarm' ($r.Code -eq 3) "exit=$($r.Code)"
+
+# 7. Fixes rename things aside; undo restores the exact tree.
 $acr = Join-Path $env:APPDATA 'Adobe\CameraRaw'
 $gpu = Join-Path $acr 'GPU\Adobe Photoshop Camera Raw'
 $cache = Join-Path $env:LOCALAPPDATA 'Adobe\CameraRaw\Cache'

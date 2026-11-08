@@ -68,6 +68,11 @@ namespace FixPhotoshop
 
         public static int Count { get { return Entries().Count; } }
 
+        public static bool CreatedByProgram(string path)
+        {
+            return Entries().Any(e => e[1] == "created" && string.Equals(e[2], path, StringComparison.OrdinalIgnoreCase));
+        }
+
         public static List<string> Undo(string fixId)
         {
             var log = new List<string>();
@@ -193,8 +198,21 @@ namespace FixPhotoshop
         {
             var list = new List<Fix>();
 
+            // An error window means Camera Raw itself opens, so Adobe's own reset button is reachable.
+            // AI tools also ignore the GPU preference, so testing "without GPU" would say nothing about them.
+            bool errorDialog = capture != null && capture.ErrorDialogTitle != null;
+
             var gpuFiles = GpuStateFiles();
-            if (gpuFiles.Count > 0)
+            if (errorDialog)
+                list.Add(new Fix
+                {
+                    Id = "gpu-reset-button",
+                    Title = "Сбросить поддержку GPU кнопкой в Camera Raw (вручную)",
+                    Explain = "Официальный шаг Adobe для Camera Raw 17.5 и новее.",
+                    Manual = true,
+                    Instructions = "1. Запустите Photoshop.\n2. Откройте Редактирование → Настройки → Camera Raw (Edit → Preferences → Camera Raw), вкладка «Производительность».\n3. Нажмите кнопку Reset GPU Support (в русской версии: сброс поддержки GPU).\n4. Закройте настройки и полностью закройте Photoshop.\n5. Запустите Photoshop снова и повторите действие, вызвавшее ошибку."
+                });
+            else if (gpuFiles.Count > 0)
                 list.Add(new Fix
                 {
                     Id = "gpu-reset",
@@ -203,8 +221,22 @@ namespace FixPhotoshop
                     Apply = () => SetAsideAll("gpu-reset", GpuStateFiles())
                 });
 
+            if (errorDialog || findings.Any(f => f.Id == "ai"))
+                list.Add(new Fix
+                {
+                    Id = "ai-cpu",
+                    Title = "Перевести ИИ-функции Camera Raw на процессор (вручную)",
+                    Explain = "Обходной путь Adobe для ошибок видеокарты в ИИ-функциях, например в размытии.",
+                    Manual = true,
+                    Instructions = "1. Откройте страницу https://helpx.adobe.com/camera-raw/kb/acr-gpu-faq.html\n2. Найдите раздел про ИИ-функции: Troubleshoot GPU driver issues while using AI-powered features like Lens Blur.\n3. Скачайте файл DisableGPUInference.txt и положите его в папку, указанную на этой странице.\n4. Перезапустите Photoshop и повторите действие.\nПо описанию Adobe, этот способ несовместим с Denoise, Raw Defaults, Super Resolution, Adaptive Color и Reflection Removal."
+                });
+
             var psGpuDirs = PhotoshopGpuDirs();
-            if (psGpuDirs.Count > 0)
+            if (errorDialog)
+            {
+                // Deliberately no "without GPU" experiment here, see above.
+            }
+            else if (psGpuDirs.Count > 0)
                 list.Add(new Fix
                 {
                     Id = "gpu-off",

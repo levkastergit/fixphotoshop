@@ -112,6 +112,17 @@ namespace FixPhotoshop
 
             var ui = c.UiThreads.ToList();
 
+            if (c.ErrorDialogTitle != null)
+                r.Add(new Finding
+                {
+                    Confidence = 2,
+                    Id = "error-dialog",
+                    Title = "Photoshop показал окно с ошибкой: «" + c.ErrorDialogTitle + "»",
+                    Evidence = "Окно процесса Photoshop с таким заголовком. Модуль Camera Raw " + (c.AcrModuleLoaded ? "загружен." : "не загружен."),
+                    Advice = "Это общее сообщение, по нему самому причину не определить. Если оно появляется на конкретном инструменте, например размытии (ИИ-функция), у Adobe есть отдельные шаги: кнопка Reset GPU Support и файл DisableGPUInference.txt. Для таких функций Adobe рекомендует 8 ГБ видеопамяти; объём вашей указан в отчёте в строке nvidia-smi. Журналы Camera Raw за этот момент добавлены в отчёт.",
+                    Fixes = new[] { "gpu-reset-button", "ai-cpu", "acr-prefs" }
+                });
+
             var stuck = ui.Where(t => t.KernelStuck).ToList();
             if (stuck.Count > 0)
                 r.Add(new Finding
@@ -276,7 +287,7 @@ namespace FixPhotoshop
                     Title = "Зависание произошло в коде ИИ-функций (ONNX/DirectML)",
                     Evidence = Top(ui.First(t => t.HasModule(Mods.IsAi))),
                     Advice = "На форуме Adobe описаны сбои GPU при ИИ-функциях Camera Raw (выбор объекта, адаптивные пресеты).",
-                    Fixes = new[] { "gpu-off", "rollback" }
+                    Fixes = new[] { "ai-cpu", "gpu-off", "rollback" }
                 });
 
             if (r.Count == 0 && ui.Any(t => t.HasModule(Mods.IsAcr)))
@@ -290,7 +301,7 @@ namespace FixPhotoshop
                     Fixes = new[] { "acr-cache", "acr-userdata", "rollback" }
                 });
 
-            if (!c.AcrWindowOpen && !c.AcrModuleLoaded)
+            if (!c.AcrWindowOpen && !c.AcrModuleLoaded && c.ErrorDialogTitle == null)
                 r.Add(new Finding
                 {
                     Confidence = 2,
@@ -301,7 +312,7 @@ namespace FixPhotoshop
                     Fixes = new[] { "ps-prefs", "plugins" }
                 });
 
-            if (c.StackCompared && !c.StackStable)
+            if (c.StackCompared && !c.StackStable && c.ErrorDialogTitle == null)
                 r.Add(new Finding
                 {
                     Confidence = 1,

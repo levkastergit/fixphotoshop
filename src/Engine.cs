@@ -38,6 +38,7 @@ namespace FixPhotoshop
         public List<Finding> HangFindings { get; private set; }
         public List<string> Notes { get; private set; }
         public List<Attempt> Attempts { get; private set; }
+        public List<string> WindowHistory { get; private set; }
         public string ReportPath { get; private set; }
         public bool CaptureDone { get; private set; }
         public bool PhotoshopRunning { get; private set; }
@@ -51,6 +52,7 @@ namespace FixPhotoshop
             HangFindings = new List<Finding>();
             Notes = new List<string>();
             Attempts = new List<Attempt>();
+            WindowHistory = new List<string>();
             ReportPath = reportPath ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
                 "FixPhotoshop-report-" + DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss") + ".txt");
         }
@@ -118,6 +120,18 @@ namespace FixPhotoshop
             }
         }
 
+        readonly HashSet<string> seenWindows = new HashSet<string>();
+
+        // Every window Photoshop opens goes into the report, so an unrecognised one can still be identified afterwards.
+        void TrackWindows(List<WinInfo> windows)
+        {
+            foreach (var w in windows)
+            {
+                if (WindowHistory.Count >= 300 || !seenWindows.Add(w.Hwnd.ToInt64() + "|" + w.Title)) continue;
+                WindowHistory.Add(string.Format("{0:HH:mm:ss}  «{1}» ({2})", DateTime.Now, w.Title, w.ClassName));
+            }
+        }
+
         void Beat(bool psRunning)
         {
             try
@@ -143,7 +157,7 @@ namespace FixPhotoshop
             StateChanged();
 
             var clock = Stopwatch.StartNew();
-            DateTime? hungSince = null, acrSince = null;
+            DateTime? hungSince = null, acrSince = null, dialogSince = null;
             bool captured = false, acrAnnounced = false;
             int seenPid = 0;
 
@@ -160,7 +174,7 @@ namespace FixPhotoshop
                     {
                         Log("Photoshop закрыт.");
                         seenPid = 0;
-                        hungSince = acrSince = null;
+                        hungSince = acrSince = dialogSince = null;
                         captured = acrAnnounced = false;
                         PhotoshopRunning = false;
                         StateChanged();
@@ -173,7 +187,7 @@ namespace FixPhotoshop
                 if (ps.Id != seenPid)
                 {
                     seenPid = ps.Id;
-                    hungSince = acrSince = null;
+                    hungSince = acrSince = dialogSince = null;
                     captured = acrAnnounced = false;
                     PhotoshopRunning = true;
                     Log("Photoshop запущен (PID " + ps.Id + ").");
@@ -184,6 +198,16 @@ namespace FixPhotoshop
                 bool acrOpen = windows.Any(w => StackCapture.IsAcrTitle(w.Title));
                 var hung = windows.Where(w => w.Hung).ToList();
                 DateTime now = DateTime.Now;
+                TrackWindows(windows);
+
+                WinInfo dialog = windows.FirstOrDefault(StackCapture.IsErrorDialog);
+                if (dialog == null) dialogSince = null;
+                else if (dialogSince == null)
+                {
+                    dialogSince = now;
+                    Log("Photoshop показал окно ошибки: «" + dialog.Title + "».");
+                }
+                bool dialogStayed = dialogSince != null && (now - dialogSince.Value).TotalSeconds >= 1;
 
                 if (hung.Count > 0)
                 {
@@ -201,7 +225,7 @@ namespace FixPhotoshop
                         hungSince = null;
                         if (captured) OnRecovered();
                     }
-                    captured = false;
+                    if (dialog == null) captured = false;
                 }
 
                 if (acrOpen)
@@ -220,13 +244,13 @@ namespace FixPhotoshop
 
                 double hungSec = hungSince == null ? 0 : (now - hungSince.Value).TotalSeconds;
                 bool manual = captureRequested;
-                if (manual || (!captured && hungSec >= HangThresholdSec))
+                if (manual || (!captured && (hungSec >= HangThresholdSec || dialogStayed)))
                 {
                     captureRequested = false;
                     captured = true;
                     try
                     {
-                        DoCapture(ps, windows, manual);
+                        DoCapture(ps, windows, manual, dialog);
                     }
                     catch (Exception ex)
                     {
@@ -250,7 +274,7 @@ namespace FixPhotoshop
                             OnAcrWorking();
                         }
                     }
-                    else if (acrOpen && !CaptureDone && !acrAnnounced)
+                    else if (acrOpen && !CaptureDone && !acrAnnounced && !Solved)
                     {
                         Status("Camera Raw открывается", "Слежу. Работайте как обычно, чтобы воспроизвести зависание.", Level.Info);
                     }
@@ -265,14 +289,19 @@ namespace FixPhotoshop
             SaveReport();
         }
 
-        void DoCapture(Process ps, List<WinInfo> windows, bool manual)
+        void DoCapture(Process ps, List<WinInfo> windows, bool manual, WinInfo dialog)
         {
-            Status("Снимаю данные о зависании…", "Не закрывайте Photoshop, это займёт до минуты.", Level.Warn);
-            Log(manual ? "Снимаю данные по вашей команде." : "Зависание подтверждено, снимаю данные о потоках и модулях.");
+            Status("Снимаю данные…", "Не закрывайте Photoshop, это займёт до минуты.", Level.Warn);
+            Log(manual ? "Снимаю данные по вашей команде." : dialog != null ? "Снимаю данные об ошибке." : "Зависание подтверждено, снимаю данные о потоках и модулях.");
 
             var cap = StackCapture.Capture(ps, windows, manual);
+            if (dialog != null) cap.ErrorDialogTitle = dialog.Title;
             cap.NvidiaSmi = Snapshot.QueryNvidiaSmi();
             var findings = Diagnosis.Hang(cap);
+
+            Snap.RefreshAcr();
+            if (!BaselineFindings.Any(f => f.Id == "tempdisable"))
+                BaselineFindings.AddRange(Diagnosis.Baseline(Snap).Where(f => f.Id == "tempdisable"));
 
             lock (sync)
             {
@@ -316,9 +345,10 @@ namespace FixPhotoshop
         {
             var last = Attempts.LastOrDefault();
             if (last == null || last.Outcome != "ожидает проверки") return "Программа ждёт и начнёт следить автоматически.";
+            string retest = AwaitingConfirmation ? "откройте Camera Raw и повторите действие, вызвавшее ошибку" : "откройте Camera Raw";
             return last.Fix.Manual
-                ? "Выполните действия из инструкции (она есть и в журнале ниже), затем откройте Camera Raw."
-                : "Шаг применён: " + last.Fix.Title + ". Запустите Photoshop и откройте Camera Raw ещё раз.";
+                ? "Выполните действия из инструкции (она есть и в журнале ниже), затем " + retest + "."
+                : "Шаг применён: " + last.Fix.Title + ". Запустите Photoshop, " + retest + ".";
         }
 
         // The window came back on its own, so this was a long wait rather than a dead hang.
@@ -339,26 +369,54 @@ namespace FixPhotoshop
         {
             Log("Camera Raw открылся и отвечает уже " + AcrOkSec + " с.");
             var last = Attempts.LastOrDefault();
-            if (last != null && last.Outcome == "ожидает проверки")
+            if (AwaitingConfirmation)
             {
-                last.Outcome = "помогло";
-                Solved = true;
-                Log("ПОМОГЛО: " + last.Fix.Title);
-                Status("Заработало! Помог шаг: " + last.Fix.Title, AfterSuccessHint(last.Fix), Level.Ok);
-                Log(AfterSuccessHint(last.Fix));
-                SaveReport();
+                // Camera Raw staying open proves nothing when the error appears only on a specific action.
+                Status("Повторите действие, вызывавшее ошибку", "Например, выберите размытие. Если ошибки нет, нажмите кнопку «Заработало».", Level.Info);
                 StateChanged();
             }
-            else if (!CaptureDone)
+            else if (last != null && last.Outcome == "ожидает проверки")
+            {
+                MarkHelped(last);
+            }
+            else if (!CaptureDone && !Solved)
             {
                 Status("Camera Raw работает нормально", "Зависания нет. Если оно случится, программа заметит; можно также нажать «Зависло сейчас».", Level.Ok);
             }
+        }
+
+        public bool AwaitingConfirmation
+        {
+            get
+            {
+                var last = Attempts.LastOrDefault();
+                return last != null && last.Outcome == "ожидает проверки" && !CaptureDone && LastCapture != null && LastCapture.ErrorDialogTitle != null;
+            }
+        }
+
+        public void ConfirmWorked()
+        {
+            var last = Attempts.LastOrDefault();
+            if (last != null && last.Outcome == "ожидает проверки") MarkHelped(last);
+        }
+
+        void MarkHelped(Attempt attempt)
+        {
+            attempt.Outcome = "помогло";
+            Solved = true;
+            Log("ПОМОГЛО: " + attempt.Fix.Title);
+            Status("Заработало! Помог шаг: " + attempt.Fix.Title, AfterSuccessHint(attempt.Fix), Level.Ok);
+            Log(AfterSuccessHint(attempt.Fix));
+            SaveReport();
+            StateChanged();
         }
 
         static string AfterSuccessHint(Fix fix)
         {
             switch (fix.Id)
             {
+                case "ai-cpu":
+                    return "Ошибка связана с работой ИИ-функций на видеокарте. Файл DisableGPUInference.txt оставьте на месте и учитывайте ограничения из инструкции.";
                 case "gpu-off":
                     return "Зависание связано с видеокартой. Откройте настройки Camera Raw → Производительность и выберите «Выкл», чтобы закрепить результат. Затем можно попробовать драйвер NVIDIA Studio и снова включить GPU.";
                 case "acr-userdata":

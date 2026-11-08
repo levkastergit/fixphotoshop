@@ -97,6 +97,13 @@ namespace FixPhotoshop
             return s;
         }
 
+        // Camera Raw writes its logs and failure markers during the failure, so they are read again at that moment.
+        public void RefreshAcr()
+        {
+            Acr = new AcrState();
+            Step("Настройки Camera Raw", ReadAcr);
+        }
+
         void ReadSystem()
         {
             using (var q = new ManagementObjectSearcher("SELECT Caption, BuildNumber, TotalVisibleMemorySize FROM Win32_OperatingSystem"))
@@ -343,7 +350,7 @@ namespace FixPhotoshop
                 string name = Path.GetFileName(f);
                 if (name.StartsWith(Backups.Prefix, StringComparison.OrdinalIgnoreCase)) continue;
                 Acr.GpuFiles.Add(string.Format("{0} ({1} байт, {2:yyyy-MM-dd HH:mm})", f, new FileInfo(f).Length, File.GetLastWriteTime(f)));
-                if (name.StartsWith("TempDisableGPU", StringComparison.OrdinalIgnoreCase)) Acr.TempDisable.Add(f);
+                if (name.StartsWith("TempDisableGPU", StringComparison.OrdinalIgnoreCase) && !Backups.CreatedByProgram(f)) Acr.TempDisable.Add(f);
                 if (name.Equals("Camera Raw GPU Config.txt", StringComparison.OrdinalIgnoreCase) && Acr.GpuConfigText == null)
                     Acr.GpuConfigText = Util.Clip(Util.TailLines(f, 200), 6000);
             }

@@ -74,6 +74,7 @@ namespace FixPhotoshop
         public bool AcrModuleLoaded;
         public string AcrModulePath;
         public string AcrVersion;
+        public string ErrorDialogTitle;
         public string PhotoshopPath;
         public string PhotoshopVersion;
         public int ProcessId;

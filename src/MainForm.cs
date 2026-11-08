@@ -13,6 +13,7 @@ namespace FixPhotoshop
         readonly Label hint = new Label();
         readonly TextBox log = new TextBox();
         readonly Button fixButton = new Button();
+        readonly Button workedButton = new Button();
         readonly Button captureButton = new Button();
         readonly Button reportButton = new Button();
         readonly Button undoButton = new Button();
@@ -51,6 +52,11 @@ namespace FixPhotoshop
             fixButton.Enabled = false;
             fixButton.Click += OnFix;
 
+            workedButton.Text = "Заработало";
+            workedButton.AutoSize = true;
+            workedButton.Visible = false;
+            workedButton.Click += (s, e) => RunBackground(engine.ConfirmWorked);
+
             captureButton.Text = "Зависло сейчас";
             captureButton.AutoSize = true;
             captureButton.Click += (s, e) => engine.RequestCapture();
@@ -64,7 +70,7 @@ namespace FixPhotoshop
             undoButton.Click += OnUndo;
 
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, Margin = new Padding(6, 0, 6, 8), WrapContents = true };
-            buttons.Controls.AddRange(new Control[] { fixButton, captureButton, reportButton, undoButton });
+            buttons.Controls.AddRange(new Control[] { fixButton, workedButton, captureButton, reportButton, undoButton });
 
             var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4 };
             root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -119,6 +125,7 @@ namespace FixPhotoshop
             Fix next = engine.CaptureDone ? engine.NextFix : null;
             fixButton.Enabled = next != null && !busy;
             fixButton.Text = next != null ? "Применить: " + next.Title : "Нет шага для применения";
+            workedButton.Visible = engine.AwaitingConfirmation && !busy;
         }
 
         void RunBackground(Action work)

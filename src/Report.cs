@@ -40,6 +40,10 @@ namespace FixPhotoshop
 
             if (cap != null) WriteCapture(b, cap);
 
+            Section(b, "ОКНА PHOTOSHOP ЗА СЕАНС");
+            if (e.WindowHistory.Count == 0) b.AppendLine("Окон не было.");
+            foreach (string w in e.WindowHistory.ToArray()) b.AppendLine(w);
+
             if (snap != null)
             {
                 Section(b, "СИСТЕМА");
@@ -111,6 +115,7 @@ namespace FixPhotoshop
             Section(b, "СНИМОК ЗАВИСАНИЯ");
             b.AppendLine("Время: " + c.When.ToString("yyyy-MM-dd HH:mm:ss") + (c.UserRequested ? " (по команде пользователя)" : ""));
             b.AppendLine("Photoshop: " + c.PhotoshopPath + " версия " + c.PhotoshopVersion);
+            if (c.ErrorDialogTitle != null) b.AppendLine("Окно ошибки: «" + c.ErrorDialogTitle + "»");
             b.AppendLine("Окно Camera Raw открыто: " + (c.AcrWindowOpen ? "да" : "нет"));
             b.AppendLine("Модуль Camera Raw загружен: " + (c.AcrModuleLoaded ? c.AcrModulePath + ", версия " + c.AcrVersion : "нет"));
             b.AppendLine(string.Format("Загрузка процессора процессом: {0:0.0}%", c.ProcessCpuPercent));
